@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title }}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Microsoft YaHei", sans-serif;
+      background: #f4f5f7;
+      color: #1f2329;
+    }
+    .app { max-width: 720px; margin: 48px auto; padding: 0 16px; }
+    h1 { font-size: 24px; margin: 0 0 20px; }
+
+    #notice {
+      margin-bottom: 12px; padding: 10px 12px; border-radius: 6px;
+      background: #fff3e6; color: #a65c00; font-size: 14px;
+    }
+    #notice[hidden] { display: none; }
+
+    .add-row { display: flex; gap: 8px; }
+    #new-text {
+      flex: 1; padding: 10px 12px; font-size: 15px;
+      border: 1px solid #d0d3d9; border-radius: 6px; outline: none;
+    }
+    #new-text:focus { border-color: #4a7dff; }
+    #add-btn {
+      padding: 10px 20px; font-size: 15px; border: 0; border-radius: 6px;
+      background: #4a7dff; color: #fff; cursor: pointer;
+    }
+    #add-btn:hover { background: #3a6ae8; }
+    .error { min-height: 18px; margin: 6px 0 0; font-size: 13px; color: #d93026; }
+
+    .toolbar {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      margin: 12px 0 16px;
+    }
+    #query {
+      flex: 1 1 180px; padding: 8px 10px; font-size: 14px;
+      border: 1px solid #d0d3d9; border-radius: 6px; outline: none;
+    }
+    .segment { display: flex; border: 1px solid #d0d3d9; border-radius: 6px; overflow: hidden; }
+    .segment button {
+      padding: 8px 12px; font-size: 14px; border: 0; background: #fff;
+      color: #4e5969; cursor: pointer;
+    }
+    .segment button.active { background: #eaf0ff; color: #2b5cd9; }
+    #sort {
+      padding: 8px 10px; font-size: 14px; border: 1px solid #d0d3d9;
+      border-radius: 6px; background: #fff; outline: none;
+    }
+    #clear-completed {
+      padding: 8px 12px; font-size: 14px; border: 1px solid #d0d3d9;
+      border-radius: 6px; background: #fff; color: #4e5969; cursor: pointer;
+    }
+    #clear-completed:disabled { opacity: .5; cursor: not-allowed; }
+    .sort-hint { width: 100%; margin: 0; font-size: 12px; color: #86909c; }
+
+    #list { list-style: none; margin: 0; padding: 0; }
+    .todo-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 12px; margin-bottom: 8px; background: #fff;
+      border: 1px solid #e5e6eb; border-radius: 8px;
+    }
+    .todo-item input[type="checkbox"] { width: 16px; height: 16px; flex: none; cursor: pointer; }
+    .text { flex: 1; font-size: 15px; word-break: break-word; cursor: text; }
+    .todo-item.done .text { color: #a9aeb8; text-decoration: line-through; }
+    .edit-wrap { flex: 1; }
+    .edit-input { width: 100%; padding: 6px 8px; font-size: 15px; border: 1px solid #4a7dff; border-radius: 4px; outline: none; }
+    .edit-wrap .error { margin: 4px 0 0; }
+    .actions { display: flex; gap: 4px; flex: none; }
+    .actions button {
+      padding: 4px 8px; font-size: 13px; border: 1px solid #e5e6eb;
+      border-radius: 4px; background: #fff; color: #4e5969; cursor: pointer;
+    }
+    .actions button:disabled { opacity: .4; cursor: not-allowed; }
+    .actions button:hover:not(:disabled) { border-color: #4a7dff; color: #2b5cd9; }
+    .empty { padding: 24px 0; text-align: center; font-size: 14px; color: #86909c; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <h1>{{ title }}</h1>
+
+    <div id="notice" hidden role="alert"></div>
+
+    <div class="add-row">
+      <input id="new-text" type="text" maxlength="100" placeholder="输入任务内容（最多 100 个字符）">
+      <button id="add-btn" type="button">添加</button>
+    </div>
+    <p id="add-error" class="error" role="alert"></p>
+
+    <div class="toolbar">
+      <input id="query" type="text" placeholder="搜索任务">
+      <div class="segment">
+        <button type="button" data-filter="all" class="active">全部</button>
+        <button type="button" data-filter="incomplete">未完成</button>
+        <button type="button" data-filter="completed">已完成</button>
+      </div>
+      <select id="sort">
+        <option value="manual">手动排序</option>
+        <option value="createdDesc">创建时间 ↓</option>
+        <option value="createdAsc">创建时间 ↑</option>
+        <option value="incompleteFirst">未完成优先</option>
+      </select>
+      <button id="clear-completed" type="button" disabled>清空已完成 (0)</button>
+      <p id="sort-hint" class="sort-hint" hidden>切换到手动排序后可调整顺序</p>
+    </div>
+
+    <ul id="list"></ul>
+  </div>
+
+  <script>
+    const state = { query: "", filter: "all", sort: "manual", items: [] };
+    let requestSeq = 0;
+    let editingId = null;
+    let editOriginal = "";
+    let editingError = "";
+    let savingEdit = false;
+
+    const inputEl = document.getElementById("new-text");
+    const addBtn = document.getElementById("add-btn");
+    const addErrorEl = document.getElementById("add-error");
+    const queryEl = document.getElementById("query");
+    const filterButtons = Array.from(document.querySelectorAll("[data-filter]"));
+    const sortEl = document.getElementById("sort");
+    const sortHintEl = document.getElementById("sort-hint");
+    const clearBtn = document.getElementById("clear-completed");
+    const listEl = document.getElementById("list");
+    const noticeEl = document.getElementById("notice");
+
+    async function request(path, options) {
+      try {
+        const res = await fetch(path, options);
+        let body = null;
+        try { body = await res.json(); } catch (err) { body = null; }
+        return { res, body };
+      } catch (err) {
+        return { res: null, body: null };
+      }
+    }
+
+    function showNotice(message) {
+      noticeEl.textContent = message;
+      noticeEl.hidden = false;
+      clearTimeout(showNotice.timer);
+      showNotice.timer = setTimeout(() => { noticeEl.hidden = true; }, 2000);
+    }
+
+    function setAddError(message) {
+      addErrorEl.textContent = message;
+      addErrorEl.dataset.kind = message ? "error" : "";
+    }
+
+    async function loadTodos() {
+      const mySeq = ++requestSeq;
+      const params = new URLSearchParams({
+        query: state.query, filter: state.filter, sort: state.sort,
+      });
+      const [main, completed] = await Promise.all([
+        request("/api/todos?" + params.toString()),
+        request("/api/todos?filter=completed"),
+      ]);
+      if (mySeq !== requestSeq) return;
+
+      if (!main.res || !main.res.ok || !main.body || !main.body.ok) {
+        showNotice("请求失败，请检查服务是否运行");
+        return;
+      }
+      state.items = main.body.data;
+      renderList();
+
+      const completedCount =
+        completed.res && completed.res.ok && completed.body && completed.body.ok
+          ? completed.body.data.length : 0;
+      updateClearButton(completedCount);
+    }
+
+    function updateClearButton(count) {
+      clearBtn.textContent = "清空已完成 (" + count + ")";
+      clearBtn.disabled = count === 0;
+      clearBtn.dataset.count = String(count);
+    }
+
+    function renderList() {
+      listEl.textContent = "";
+      sortHintEl.hidden = state.sort === "manual";
+
+      if (state.items.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "empty";
+        empty.textContent = "还没有任务，先添加一条吧";
+        listEl.append(empty);
+        return;
+      }
+
+      state.items.forEach((todo, index) => listEl.append(renderItem(todo, index)));
+      const editInput = listEl.querySelector(".edit-input");
+      if (editInput) { editInput.focus(); editInput.select(); }
+    }
+
+    function renderItem(todo, index) {
+      const li = document.createElement("li");
+      li.className = "todo-item" + (todo.isCompleted ? " done" : "");
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = todo.isCompleted;
+      checkbox.setAttribute("aria-label", "标记完成");
+      checkbox.addEventListener("change", () => toggleTodo(todo));
+      li.append(checkbox);
+
+      if (editingId === todo.id) {
+        const wrap = document.createElement("div");
+        wrap.className = "edit-wrap";
+
+        const editInput = document.createElement("input");
+        editInput.className = "edit-input";
+        editInput.type = "text";
+        editInput.maxLength = 100;
+        editInput.value = todo.text;
+        editInput.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            saveEdit(todo.id, editInput.value);
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            editingId = null;
+            editingError = "";
+            renderList();
+          }
+        });
+        editInput.addEventListener("blur", () => {
+          if (editingId === todo.id) saveEdit(todo.id, editInput.value);
+        });
+
+        const err = document.createElement("p");
+        err.className = "error";
+        err.textContent = editingError;
+
+        wrap.append(editInput, err);
+        li.append(wrap);
+        return li;
+      }
+
+      const text = document.createElement("span");
+      text.className = "text";
+      text.textContent = todo.text;
+      text.title = "双击编辑";
+      text.addEventListener("dblclick", () => startEdit(todo));
+      li.append(text);
+
+      const actions = document.createElement("div");
+      actions.className = "actions";
+
+      if (state.sort === "manual") {
+        const upBtn = document.createElement("button");
+        upBtn.type = "button";
+        upBtn.textContent = "↑";
+        upBtn.title = "上移";
+        upBtn.disabled = index === 0;
+        upBtn.addEventListener("click", () => moveTodo(todo.id, "up"));
+        actions.append(upBtn);
+
+        const downBtn = document.createElement("button");
+        downBtn.type = "button";
+        downBtn.textContent = "↓";
+        downBtn.title = "下移";
+        downBtn.disabled = index === state.items.length - 1;
+        downBtn.addEventListener("click", () => moveTodo(todo.id, "down"));
+        actions.append(downBtn);
+      }
+
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.textContent = "编辑";
+      editBtn.addEventListener("click", () => startEdit(todo));
+      actions.append(editBtn);
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.textContent = "删除";
+      deleteBtn.addEventListener("click", () => deleteTodo(todo.id));
+      actions.append(deleteBtn);
+
+      li.append(actions);
+      return li;
+    }
+
+    async function addTodo() {
+      setAddError("");
+      const payload = JSON.stringify({ text: inputEl.value });
+      const { res, body } = await request("/api/todos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+      });
+
+      if (!res || !res.ok) {
+        setAddError(body && body.message ? body.message : "请求失败，请检查服务是否运行");
+        return;
+      }
+      inputEl.value = "";
+      inputEl.focus();
+      loadTodos();
+    }
+
+    async function toggleTodo(todo) {
+      const { res, body } = await request("/api/todos/" + encodeURIComponent(todo.id), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isCompleted: !todo.isCompleted }),
+      });
+      if (!res || !res.ok) {
+        showNotice(body && body.message ? body.message : "请求失败，请检查服务是否运行");
+      }
+      loadTodos();
+    }
+
+    function startEdit(todo) {
+      editingId = todo.id;
+      editingError = "";
+      editOriginal = todo.text;
+      renderList();
+    }
+
+    async function saveEdit(id, value) {
+      if (savingEdit) return;
+      if (value === editOriginal) {
+        editingId = null;
+        editingError = "";
+        renderList();
+        return;
+      }
+
+      savingEdit = true;
+      const { res, body } = await request("/api/todos/" + encodeURIComponent(id), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: value }),
+      });
+      savingEdit = false;
+
+      if (!res || !res.ok) {
+        editingError = body && body.message ? body.message : "请求失败，请检查服务是否运行";
+        editingId = id;
+        renderList();
+        return;
+      }
+      editingId = null;
+      editingError = "";
+      editOriginal = "";
+      loadTodos();
+    }
+
+    async function deleteTodo(id) {
+      const { res, body } = await request("/api/todos/" + encodeURIComponent(id), {
+        method: "DELETE",
+      });
+      if (!res || !res.ok) {
+        showNotice(body && body.message ? body.message : "请求失败，请检查服务是否运行");
+      }
+      loadTodos();
+    }
+
+    async function moveTodo(id, direction) {
+      const { res, body } = await request(
+        "/api/todos/" + encodeURIComponent(id) + "/move",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ direction }),
+        }
+      );
+      if (!res || !res.ok) {
+        showNotice(body && body.message ? body.message : "请求失败，请检查服务是否运行");
+      }
+      loadTodos();
+    }
+
+    addBtn.addEventListener("click", addTodo);
+
+    inputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        addTodo();
+      }
+    });
+
+    inputEl.addEventListener("input", () => {
+      if (inputEl.value.length >= 100) {
+        addErrorEl.textContent = "最多 100 个字符";
+        addErrorEl.dataset.kind = "hint";
+      } else if (addErrorEl.dataset.kind === "hint") {
+        addErrorEl.textContent = "";
+        addErrorEl.dataset.kind = "";
+      }
+    });
+
+    let queryTimer = null;
+    queryEl.addEventListener("input", () => {
+      clearTimeout(queryTimer);
+      queryTimer = setTimeout(() => {
+        state.query = queryEl.value;
+        loadTodos();
+      }, 200);
+    });
+
+    filterButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.filter = btn.dataset.filter;
+        filterButtons.forEach((other) => other.classList.toggle("active", other === btn));
+        loadTodos();
+      });
+    });
+
+    sortEl.addEventListener("change", () => {
+      state.sort = sortEl.value;
+      loadTodos();
+    });
+
+    clearBtn.addEventListener("click", async () => {
+      const count = Number(clearBtn.dataset.count || "0");
+      if (count === 0) return;
+      if (!confirm("确定要清空 " + count + " 条已完成任务？")) return;
+
+      const { res, body } = await request("/api/todos/clear-completed", { method: "POST" });
+      if (!res || !res.ok) {
+        showNotice(body && body.message ? body.message : "请求失败，请检查服务是否运行");
+      }
+      loadTodos();
+    });
+
+    loadTodos();
+  </script>
+</body>
+</html>
